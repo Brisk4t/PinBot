@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from discord.ext import commands
 import re
 import requests 
+import datetime
 
 # Load environment variables
 load_dotenv()
@@ -21,16 +22,20 @@ class server:
     def __init__(self, server):
         self.server = server
         self.pin_cache = {} # id:list
+        self.last_updated = None
         self.channels = server.text_channels
+        self.watched_channels = []
         print(self.channels)
 
     async def build_cache(self):
         for channel in self.channels: # For each text channel get all its pins as a list
-            await self.build_channel_cache(channel)
+            if channel in self.watched_channels:
+                await self.build_channel_cache(channel)
             
     async def build_channel_cache(self, channel):
         try:
             print(f"Channel {channel.name} added")
+            self.last_updated = datetime.datetime.now()
             self.pin_cache[channel.id] = await channel.pins()
             
         except:
@@ -44,16 +49,26 @@ class server:
 
     def get_channel_id(self, channel_name):
         return discord.utils.get(self.channels, name=channel_name).id
+    
+    def pins_full(self, channel_id):
+        return len(self.pin_cache[channel_id]) == 49
 
+    def watch_channels(self, watched):
+        self.watched_channels = watched
+
+    def new_watched_channel(self, new_channel):
+        self.watched_channels.append(new_channel)
+
+        
 def createembed(message, content, link, image_url=None):
     author_name = message.author.name  # Get the author name from the context
     textString = f'[{content}]({link})' if content else link  # If content exists, use it; otherwise, just use the link
     embed = discord.Embed(
-        title=author_name,
+        title=None,
         description=textString,
         timestamp=message.created_at,
         color=discord.Color.blue()
-    )
+    ).set_author(name=author_name, icon_url=message.author.avatar.url)
     
     # If the message contains an image or a GIF, add it to the embed
     if image_url:
@@ -61,59 +76,51 @@ def createembed(message, content, link, image_url=None):
 
     return embed
 
-async def send_embed(ctx, message):
-    channel = ctx.channel
+async def send_embed_message(message):
+    channel = message.channel
     try:
-        # Skip the command message itself (triggered by the bot or the user)
-        if message.id != ctx.message.id:
-            
-            # Construct the message link (format: https://discord.com/channels/{guild_id}/{channel_id}/{message_id})
-            message_link = f"https://discord.com/channels/{ctx.guild.id}/{channel.id}/{message.id}"
+        # Construct the message link (format: https://discord.com/channels/{guild_id}/{channel_id}/{message_id})
+        message_link = f"https://discord.com/channels/{message.guild.id}/{channel.id}/{message.id}"
 
-            image_url = None
-            embed_content = message.content
+        image_url = None
+        embed_content = message.content
 
-            # Case 1: Check if the message has an attachment (image or GIF)
-            if message.attachments:
-                for attachment in message.attachments:
-                    if attachment.url:  # Use the attachment URL directly, no need to parse
-                        image_url = attachment.url
-                        break
-            
-            # Case 2: If the message contains embeds (like a GIF from Tenor), use the embed image
-            elif message.embeds:
-                for embed in message.embeds:
-                    if embed.image:  # This checks for an embedded image
-                        image_url = embed.image.url
-                        break
+        # Case 1: Check if the message has an attachment (image or GIF)
+        if message.attachments:
+            for attachment in message.attachments:
+                if attachment.url:  # Use the attachment URL directly, no need to parse
+                    image_url = attachment.url
+                    break
+        
+        # Case 2: If the message contains embeds (like a GIF from Tenor), use the embed image
+        elif message.embeds:
+            for embed in message.embeds:
+                if embed.image:  # This checks for an embedded image
+                    image_url = embed.image.url
+                    break
 
-            # Case 3: Check if the message content contains a direct GIF link (like Tenor or other GIF services)
-            if not image_url and message.content and ("tenor.com/view" in message.content or message.content.endswith('.gif')):
-                # First, use the direct link if it exists (previous working logic)
-                image_url = message.content.strip()
+        # Case 3: Check if the message content contains a direct GIF link (like Tenor or other GIF services)
+        if not image_url and message.content and ("tenor.com/view" in message.content or message.content.endswith('.gif')):
+            # First, use the direct link if it exists (previous working logic)
+            image_url = message.content.strip()
 
-                # If it's a Tenor page link, attempt to extract the direct GIF link
-                if "tenor.com/view" in message.content:
-                    tenor_direct_gif_url = get_tenor_direct_gif_url(message.content.strip())
-                    if tenor_direct_gif_url:
-                        image_url = tenor_direct_gif_url
+            # If it's a Tenor page link, attempt to extract the direct GIF link
+            if "tenor.com/view" in message.content:
+                tenor_direct_gif_url = get_tenor_direct_gif_url(message.content.strip())
+                if tenor_direct_gif_url:
+                    image_url = tenor_direct_gif_url
 
-                embed_content = None
-            
-            # Create an embed using the message content, message link, and image URL (if any)
-            embed = createembed(message, embed_content, message_link, image_url)
-            
-            # Send the embed to the current channel
-            await ctx.send(embed=embed)
-            return
+            embed_content = None
+        
+        # Create an embed using the message content, message link, and image URL (if any)
+        embed = createembed(message, embed_content, message_link, image_url)
+        
+        # Send the embed to the current channel
+        await channel.send(embed=embed)
+        return
             
     except Exception as e:
-        await ctx.send(f"An error occurred: {e}")
-
-
-
-
-
+        await channel.send(f"An error occurred: {e}")
 
 def get_tenor_direct_gif_url(tenor_url):
     print(tenor_url)
@@ -161,7 +168,9 @@ async def sendembed(ctx):
         return
 
     async for message in channel.history(limit=2): 
-        await send_embed(ctx, message)
+        if message.id != ctx.message.id:
+            await send_embed_message(message)
+
     # Fetch the most recent message
 
 
@@ -170,9 +179,28 @@ async def sendembed(ctx):
 async def on_guild_channel_pins_update(channel, last_pin):
     # Update the cache for the specific channel when pins change
     guild_id = channel.guild.id
+
     if guild_id in servers:
         server = servers[guild_id]
-        await server.build_channel_cache(channel)  # Rebuild the pin cache for the channel when pins are updated
+        await server.build_channel_cache(channel) # Update the local cache of pinned message
+
+        if last_pin.replace(tzinfo=None) > server.last_updated : # If a pin was added
+            if not server.pins_full(channel.id): # Check if pin limit has been reached (capped at 49 to maintain usability of pins)
+                await send_embed_message(server.pin_cache[channel.id][0])
+
+            else:
+                pass
+
+
+
+        elif last_pin.replace(tzinfo=None) < server.last_updated: # If a pin was removed
+            pass
+
+
+
+       
+    
+          # Rebuild the pin cache for the channel when pins are updated
 
 
 
