@@ -18,6 +18,25 @@ intents.message_content = True
 client = commands.Bot(command_prefix=command_prefix, intents=intents)
 servers = {}
 
+class Pin:
+
+    def __init__(self, message):
+        self.message = message
+        self.embed = None
+        self.modified_by = None
+        self.modified = False
+
+    def add_embed(self, embed):
+        self.embed = embed
+
+    def get_embed(self):
+        return self.embed
+    
+    def modify(self, user):
+        self.modified = True
+        self.modified_by = user
+
+
 class server:
     def __init__(self, server):
         self.server = server
@@ -36,7 +55,12 @@ class server:
         try:
             print(f"Channel {channel.name} added")
             self.last_updated = datetime.datetime.now()
-            self.pin_cache[channel.id] = await channel.pins()
+            
+            channel_pins = await channel.pins()
+            self.pin_cache[channel.id] = []
+
+            for pin in channel_pins:
+                self.pin_cache[channel.id].append(Pin(pin))
             
         except:
             pass
@@ -59,7 +83,7 @@ class server:
     def new_watched_channel(self, new_channel):
         self.watched_channels.append(new_channel)
 
-        
+
 def createembed(message, content, link, image_url=None):
     author_name = message.author.name  # Get the author name from the context
     textString = f'[{content}]({link})' if content else link  # If content exists, use it; otherwise, just use the link
@@ -76,7 +100,8 @@ def createembed(message, content, link, image_url=None):
 
     return embed
 
-async def send_embed_message(message):
+async def send_embed_message(pin_obj):
+    message = pin_obj.message
     channel = message.channel
     try:
         # Construct the message link (format: https://discord.com/channels/{guild_id}/{channel_id}/{message_id})
@@ -116,11 +141,13 @@ async def send_embed_message(message):
         embed = createembed(message, embed_content, message_link, image_url)
         
         # Send the embed to the current channel
-        await channel.send(embed=embed)
+        embed_message = await channel.send(embed=embed)
+        pin_obj.add_embed(embed_message)
         return
             
     except Exception as e:
         await channel.send(f"An error occurred: {e}")
+
 
 def get_tenor_direct_gif_url(tenor_url):
     print(tenor_url)
@@ -142,9 +169,9 @@ async def on_ready():
     
     for guild in client.guilds: # Create a server class object for every server
         new_server = server(guild)
+        new_server.new_watched_channel(discord.utils.get(guild.channels, name="pins"))
         servers[guild.id] = new_server
         print(guild.name + "added")
-        
         await new_server.build_cache() # Build the pin cache for all text channels 
 
 
@@ -182,20 +209,19 @@ async def on_guild_channel_pins_update(channel, last_pin):
 
     if guild_id in servers:
         server = servers[guild_id]
+        cached_pins = server.get_pins(channel.id)
         await server.build_channel_cache(channel) # Update the local cache of pinned message
+        new_pin_count = server.pin_count(channel.id)
 
-        if last_pin.replace(tzinfo=None) > server.last_updated : # If a pin was added
-            if not server.pins_full(channel.id): # Check if pin limit has been reached (capped at 49 to maintain usability of pins)
-                await send_embed_message(server.pin_cache[channel.id][0])
-
+        if last_pin is not None and last_pin.replace(tzinfo=None) > server.last_updated:
+            if new_pin_count > len(cached_pins):  # If a new pin was added
+                if not server.pins_full(channel.id):  # Check if the pin limit has been reached (capped at 49)
+                    await send_embed_message(server.pin_cache[channel.id][0])  # Send the most recent pinned message
             else:
-                pass
-
-
-
-        elif last_pin.replace(tzinfo=None) < server.last_updated: # If a pin was removed
-            pass
-
+                embed = cached_pins[0].get_embed()
+                # Check if the message ID exists in the dictionary
+                if embed:
+                    await embed.delete()
 
 
        
