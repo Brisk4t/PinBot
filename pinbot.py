@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 from discord.ext import commands
 import re
+import requests 
 
 # Load environment variables
 load_dotenv()
@@ -44,12 +45,13 @@ class server:
     def get_channel_id(self, channel_name):
         return discord.utils.get(self.channels, name=channel_name).id
 
-def createembed(ctx, content, link, image_url=None):
-    author_name = ctx.author.name  # Get the author name from the context
+def createembed(message, content, link, image_url=None):
+    author_name = message.author.name  # Get the author name from the context
     textString = f'[{content}]({link})' if content else link  # If content exists, use it; otherwise, just use the link
     embed = discord.Embed(
-        title=f"Message by {author_name}",
+        title=author_name,
         description=textString,
+        timestamp=message.created_at,
         color=discord.Color.blue()
     )
     
@@ -59,6 +61,20 @@ def createembed(ctx, content, link, image_url=None):
 
     return embed
 
+def get_tenor_direct_gif_url(tenor_url):
+    print(tenor_url)
+
+        # Make a request to Tenor's page to retrieve the GIF metadata
+    if re.findall(r'https?://tenor.com/view\S+', tenor_url):
+      tenor_http = requests.get(tenor_url)
+      direct_link_list = re.findall(r"https?://media1.tenor.com/m\S+.gif", tenor_http.text)
+      direct_link = direct_link_list[0]
+      return direct_link
+    else:
+      print("Not a tenor link")
+
+
+      
 @client.event
 async def on_ready():
     print(f'We have logged in as {client.user}')
@@ -99,7 +115,8 @@ async def sendembed(ctx):
                 message_link = f"https://discord.com/channels/{ctx.guild.id}/{channel.id}/{last_message.id}"
 
                 image_url = None
-                
+                embed_content = last_message.content
+
                 # Case 1: Check if the message has an attachment (image or GIF)
                 if last_message.attachments:
                     for attachment in last_message.attachments:
@@ -116,10 +133,19 @@ async def sendembed(ctx):
 
                 # Case 3: Check if the message content contains a direct GIF link (like Tenor or other GIF services)
                 if not image_url and last_message.content and ("tenor.com/view" in last_message.content or last_message.content.endswith('.gif')):
+                    # First, use the direct link if it exists (previous working logic)
                     image_url = last_message.content.strip()
 
+                    # If it's a Tenor page link, attempt to extract the direct GIF link
+                    if "tenor.com/view" in last_message.content:
+                        tenor_direct_gif_url = get_tenor_direct_gif_url(last_message.content.strip())
+                        if tenor_direct_gif_url:
+                            image_url = tenor_direct_gif_url
+
+                    embed_content = None
+                
                 # Create an embed using the message content, message link, and image URL (if any)
-                embed = createembed(ctx, last_message.content or "[Media]", message_link, image_url)
+                embed = createembed(last_message, embed_content, message_link, image_url)
                 
                 # Send the embed to the current channel
                 await ctx.send(embed=embed)
