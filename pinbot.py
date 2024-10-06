@@ -7,6 +7,7 @@ from discord.ext import commands
 import re
 import requests 
 import datetime
+from collections import deque
 
 # Load environment variables
 load_dotenv()
@@ -40,7 +41,7 @@ class Pin:
 class server:
     def __init__(self, server):
         self.server = server
-        self.pin_cache = {} # id:list
+        self.pin_cache = {} # channel_id:list
         self.last_updated = None
         self.channels = server.text_channels
         self.watched_channels = []
@@ -57,13 +58,15 @@ class server:
             self.last_updated = datetime.datetime.now()
             
             channel_pins = await channel.pins()
-            self.pin_cache[channel.id] = []
+            self.pin_cache[channel.id] = deque([])
 
             for pin in channel_pins:
                 self.pin_cache[channel.id].append(Pin(pin))
             
         except:
             pass
+
+
 
     def pin_count(self, channel_id):
         return len(self.pin_cache[channel_id])
@@ -82,6 +85,47 @@ class server:
 
     def new_watched_channel(self, new_channel):
         self.watched_channels.append(new_channel)
+
+
+    def print_pins(self, pin_list):
+        print("Pins:\n")
+        for pin in pin_list:
+            print(pin.message.content, end='\n')
+    
+    async def update_channel_cache(self, channel):
+        print(f"Channel {channel.name} updated")
+        self.last_updated = datetime.datetime.now()
+        
+        channel_pins = await channel.pins()
+        pin_objects = []
+
+        for pin in channel_pins:
+                pin_objects.append(Pin(pin))
+
+        if len(pin_objects) > len(self.pin_cache[channel.id]): # If a pin was added
+            changed = get_changed_messages(pin_objects, self.pin_cache[channel.id])
+            for item in reversed(changed):
+                self.pin_cache[channel.id].appendleft(item)
+            return None
+        
+        else: # If a pin was removed
+            changed = get_changed_messages(self.pin_cache[channel.id], pin_objects)
+            return changed
+
+
+def get_changed_messages(list1, list2):
+# Create sets of message IDs from both lists
+    list1_ids = {pin.message.id for pin in list1}
+    list2_ids = {pin.message.id for pin in list2}
+    
+
+    # Find IDs that are in list1 but not in list2
+    removed_ids = list1_ids - list2_ids
+
+    # Return the Pin objects from list1 that were removed
+    removed_pins = [pin for pin in list1 if pin.message.id in removed_ids]
+    
+    return removed_pins
 
 
 def createembed(message, content, link, image_url=None):
@@ -143,6 +187,7 @@ async def send_embed_message(pin_obj):
         # Send the embed to the current channel
         embed_message = await channel.send(embed=embed)
         pin_obj.add_embed(embed_message)
+
         return
             
     except Exception as e:
@@ -202,6 +247,42 @@ async def sendembed(ctx):
 
 
         
+# @client.event
+# async def on_guild_channel_pins_update(channel, last_pin):
+#     # Update the cache for the specific channel when pins change
+#     guild_id = channel.guild.id
+
+#     if guild_id in servers:
+#         server = servers[guild_id]
+#         cached_pins = server.get_pins(channel.id) # The pins before the new pin was added / removed
+#         await server.build_channel_cache(channel) # Update the local cache of pinned message
+#         new_pin_count = server.pin_count(channel.id)
+
+        
+
+#         if last_pin is not None and last_pin.replace(tzinfo=None) > server.last_updated:
+#             if new_pin_count > len(cached_pins):  # If a new pin was added
+#                 if not server.pins_full(channel.id):  # Check if the pin limit has been reached (capped at 49)
+#                     await send_embed_message(server.get_pins(channel.id)[0])  # Send the most recent pinned message
+#                     print(server.get_pins(channel.id)[0].get_embed())
+#             else:
+
+#                 value = server.(channel.id, cached_pins)
+
+#                 print(value[0].message.content)
+
+#                 embed = value[0].get_embed()
+#                 print(embed)
+                
+#                 # Check if the message ID exists in the dictionary
+#                 if embed:
+#                     await embed.delete()
+
+
+       
+    
+#           # Rebuild the pin cache for the channel when pins are updated
+
 @client.event
 async def on_guild_channel_pins_update(channel, last_pin):
     # Update the cache for the specific channel when pins change
@@ -209,25 +290,25 @@ async def on_guild_channel_pins_update(channel, last_pin):
 
     if guild_id in servers:
         server = servers[guild_id]
-        cached_pins = server.get_pins(channel.id)
-        await server.build_channel_cache(channel) # Update the local cache of pinned message
-        new_pin_count = server.pin_count(channel.id)
+        removed_pins = await server.update_channel_cache(channel)
 
-        if last_pin is not None and last_pin.replace(tzinfo=None) > server.last_updated:
-            if new_pin_count > len(cached_pins):  # If a new pin was added
+
+        if not removed_pins: # If no pins were removed (a pin was added)
                 if not server.pins_full(channel.id):  # Check if the pin limit has been reached (capped at 49)
-                    await send_embed_message(server.pin_cache[channel.id][0])  # Send the most recent pinned message
-            else:
-                embed = cached_pins[0].get_embed()
-                # Check if the message ID exists in the dictionary
-                if embed:
-                    await embed.delete()
+                    await send_embed_message(server.get_pins(channel.id)[0])  # Send the most recent pinned message
+                    #print(server.get_pins(channel.id)[0].get_embed())
+        else:
+            print("Unpinned:", removed_pins[0].message.content)
+            embed = removed_pins[0].get_embed()
+            print(embed)
+                
+            if embed:
+                await embed.delete()
 
 
        
     
           # Rebuild the pin cache for the channel when pins are updated
-
 
 
 
