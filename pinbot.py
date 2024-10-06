@@ -37,11 +37,19 @@ class Pin:
         self.modified = True
         self.modified_by = user
 
+    async def unpin(self, delete_embed=False):
+        await self.message.unpin()
+
+        if delete_embed:
+            if self.embed:
+                await self.embed.delete()
+
+        self.modify("bot")
 
 class server:
     def __init__(self, server):
         self.server = server
-        self.pin_cache = {} # channel_id:list
+        self.pin_cache = {} # channel_id:list (Latest Pin -----------------> Oldest Pin)
         self.last_updated = None
         self.channels = server.text_channels
         self.watched_channels = []
@@ -78,6 +86,11 @@ class server:
     
     def pins_full(self, channel_id):
         return len(self.pin_cache[channel_id]) == 49
+
+    def delete_all_pins(self, channel_id):
+        pass
+        # for pin in self.pin_cache[channel_id]:
+        #     pin.
 
     def watch_channels(self, watched):
         self.watched_channels = watched
@@ -118,6 +131,12 @@ class server:
             print("Pin removed")
             self.print_pins(self.pin_cache[channel.id])
             return changed, True # return the pin(s) that were removed
+        
+
+    async def handleoverflow(self, channel): # If there are more than 49 pins on the channel
+        if self.pin_count(channel.id) > 49:
+            self.pin_cache[channel.id][-1].unpin() # Unpin the oldest pin but dont delete the embed
+
 
 
 def get_changed_messages(list1, list2):
@@ -200,7 +219,6 @@ async def send_embed_message(pin_obj):
     except Exception as e:
         await channel.send(f"An error occurred: {e}")
 
-
 def get_tenor_direct_gif_url(tenor_url):
     print(tenor_url)
 
@@ -252,6 +270,36 @@ async def sendembed(ctx):
 
     # Fetch the most recent message
 
+@client.command()
+async def addpins(ctx):
+    server = servers[ctx.guild.id]
+    channel = ctx.channel
+    
+    i = 0
+    while server.pin_count(channel.id) < 49:
+        new_pin = await ctx.send(f"Pin {i}")
+        await new_pin.pin()
+        i+=1
+
+
+
+@client.command()
+async def clearpins(ctx, command):
+    server = servers[ctx.guild.id]
+    channel = ctx.channel
+
+    if command == "--remove-embed":
+        for pin in server.get_pins(channel.id):
+            pin.unpin(True)
+
+    if command == "--delete-message":
+        for pin in server.get_pins(channel.id):
+            await pin.unpin(True)
+            await pin.message.delete()
+
+    else:
+        for pin in server.get_pins(channel.id):
+            pin.unpin()        
 
 
 @client.event
@@ -261,16 +309,20 @@ async def on_guild_channel_pins_update(channel, last_pin):
 
     if guild_id in servers:
         server = servers[guild_id]
-        changed_pins, change = await server.update_channel_cache(channel)
+        changed_pins, change = await server.update_channel_cache(channel) # Get the list of changed pin and if they were added or removed
 
 
         if not change: # If no pins were removed (a pin was added)
-                for new_pin in changed_pins:
-                    if not server.pins_full(channel.id):  # Check if the pin limit has been reached (capped at 49)
-                        await send_embed_message(new_pin)  # Send the most recent pinned message
-                        #print(server.get_pins(channel.id)[0].get_embed())
-        else:
             for new_pin in changed_pins:
+                if not server.pins_full(channel.id):  # Check if the pin limit has been reached (capped at 49)
+                    await send_embed_message(new_pin)  # Send the most recent pinned message
+
+                else:
+                    await server.pinoverflow() # Handle the case where the pin limit has been reached
+
+
+        else:
+            for new_pin in changed_pins: 
                 try:
                     embed = new_pin.get_embed()                
                     if embed:
